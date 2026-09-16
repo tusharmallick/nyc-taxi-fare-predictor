@@ -1,26 +1,37 @@
 """
-NYC Taxi Fare Prediction — deployment app
+NYC Taxi Fare Prediction — Streamlit app
 Lab Assignment 02 | Deep Feedforward Neural Network
 
-Run locally:   python app.py
-On HF Spaces:  this file is the entrypoint, nothing else needed.
+Run locally:        streamlit run app.py
+Streamlit Cloud:    this file is the entrypoint (see README for deploy steps)
 """
 
-import os
 import numpy as np
 import pandas as pd
 import joblib
-import gradio as gr
+import streamlit as st
 from tensorflow import keras
 
 # ---------------------------------------------------------------------------
-# Load artifacts (same folder as this file)
+# Page config (must be the first Streamlit command)
+# ---------------------------------------------------------------------------
+st.set_page_config(page_title="NYC Taxi Fare Predictor", page_icon="🚕", layout="centered")
+
+# ---------------------------------------------------------------------------
+# Load artifacts (same folder as this file) — cached so they load only once
 # ---------------------------------------------------------------------------
 MODEL_PATH = "final_taxi_fare_model.keras"
 SCALER_PATH = "scaler.pkl"
 
-model = keras.models.load_model(MODEL_PATH, compile=False)
-scaler = joblib.load(SCALER_PATH)
+
+@st.cache_resource
+def load_artifacts():
+    model = keras.models.load_model(MODEL_PATH, compile=False)
+    scaler = joblib.load(SCALER_PATH)
+    return model, scaler
+
+
+model, scaler = load_artifacts()
 
 # MUST match the FEATURES list used during training, in the same order.
 FEATURES = [
@@ -94,109 +105,119 @@ LANDMARKS = {
     "Yankee Stadium": (-73.9262, 40.8296),
 }
 
+EXAMPLES = {
+    "Empire State Building -> JFK Airport": (
+        "Empire State Building", "JFK Airport", "2015-06-15", "18:30", 1,
+    ),
+    "Times Square -> Central Park": (
+        "Times Square", "Central Park", "2015-03-10", "09:00", 2,
+    ),
+    "Wall Street -> LaGuardia Airport": (
+        "Wall Street", "LaGuardia Airport", "2015-11-21", "14:15", 3,
+    ),
+}
 
-def predict_fare(pickup_place, dropoff_place,
-                 pu_lon, pu_lat, do_lon, do_lat,
-                 date_str, time_str, passenger_count):
+
+def predict_fare(pickup_place, dropoff_place, pu_lon, pu_lat, do_lon, do_lat,
+                  date_val, time_val, passenger_count):
+    # Resolve landmark presets, falling back to the manual coordinate boxes
+    if LANDMARKS.get(pickup_place):
+        pu_lon, pu_lat = LANDMARKS[pickup_place]
+    if LANDMARKS.get(dropoff_place):
+        do_lon, do_lat = LANDMARKS[dropoff_place]
+
+    timestamp = pd.Timestamp.combine(date_val, time_val)
+
+    row = pd.DataFrame([{
+        "pickup_longitude": float(pu_lon),
+        "pickup_latitude": float(pu_lat),
+        "dropoff_longitude": float(do_lon),
+        "dropoff_latitude": float(do_lat),
+        "pickup_datetime": timestamp,
+        "passenger_count": int(passenger_count),
+    }])
+
+    row = engineer_features(row)
+    X = scaler.transform(row[FEATURES].values.astype("float32"))
+    fare = float(model.predict(X, verbose=0).flatten()[0])
+    distance = float(row["trip_distance_km"].iloc[0])
+    rush = bool(row["is_rush_hour"].iloc[0])
+    weekend = bool(row["is_weekend"].iloc[0])
+
+    return fare, distance, timestamp, rush, weekend
+
+
+# ---------------------------------------------------------------------------
+# Session state defaults (so the "load example" buttons can update the widgets)
+# ---------------------------------------------------------------------------
+defaults = {
+    "pickup_place": "Empire State Building",
+    "dropoff_place": "JFK Airport",
+    "pu_lon": -73.9857, "pu_lat": 40.7484,
+    "do_lon": -73.7781, "do_lat": 40.6413,
+    "date_val": pd.Timestamp("2015-06-15").date(),
+    "time_val": pd.Timestamp("2015-06-15 18:30").time(),
+    "passenger_count": 1,
+}
+for key, val in defaults.items():
+    st.session_state.setdefault(key, val)
+
+# ---------------------------------------------------------------------------
+# UI
+# ---------------------------------------------------------------------------
+st.title("🚕 NYC Taxi Fare Predictor")
+st.caption("Deep Feedforward Neural Network | Lab Assignment 02")
+st.write("Pick a landmark or enter coordinates manually, set the trip time, and get an estimated fare.")
+
+with st.expander("Try an example"):
+    cols = st.columns(len(EXAMPLES))
+    for col, (label, vals) in zip(cols, EXAMPLES.items()):
+        if col.button(label, use_container_width=True):
+            (st.session_state["pickup_place"], st.session_state["dropoff_place"],
+             date_str, time_str, st.session_state["passenger_count"]) = vals
+            st.session_state["date_val"] = pd.to_datetime(date_str).date()
+            st.session_state["time_val"] = pd.to_datetime(time_str).time()
+            st.rerun()
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("Pickup")
+    pickup_place = st.selectbox("Pickup location", list(LANDMARKS.keys()), key="pickup_place")
+    pu_lon = st.number_input("Pickup longitude", value=st.session_state["pu_lon"], format="%.4f", key="pu_lon")
+    pu_lat = st.number_input("Pickup latitude", value=st.session_state["pu_lat"], format="%.4f", key="pu_lat")
+
+with col2:
+    st.subheader("Drop-off")
+    dropoff_place = st.selectbox("Drop-off location", list(LANDMARKS.keys()), key="dropoff_place")
+    do_lon = st.number_input("Drop-off longitude", value=st.session_state["do_lon"], format="%.4f", key="do_lon")
+    do_lat = st.number_input("Drop-off latitude", value=st.session_state["do_lat"], format="%.4f", key="do_lat")
+
+col3, col4, col5 = st.columns(3)
+with col3:
+    date_val = st.date_input("Date", key="date_val")
+with col4:
+    time_val = st.time_input("Time", key="time_val")
+with col5:
+    passenger_count = st.slider("Passengers", 1, 6, key="passenger_count")
+
+if st.button("Estimate Fare", type="primary", use_container_width=True):
     try:
-        # Resolve landmark presets, falling back to the manual coordinate boxes
-        if LANDMARKS.get(pickup_place):
-            pu_lon, pu_lat = LANDMARKS[pickup_place]
-        if LANDMARKS.get(dropoff_place):
-            do_lon, do_lat = LANDMARKS[dropoff_place]
+        fare, distance, timestamp, rush, weekend = predict_fare(
+            pickup_place, dropoff_place, pu_lon, pu_lat, do_lon, do_lat,
+            date_val, time_val, passenger_count,
+        )
 
-        timestamp = pd.to_datetime(f"{date_str} {time_str}")
-
-        row = pd.DataFrame([{
-            "pickup_longitude": float(pu_lon),
-            "pickup_latitude": float(pu_lat),
-            "dropoff_longitude": float(do_lon),
-            "dropoff_latitude": float(do_lat),
-            "pickup_datetime": timestamp,
-            "passenger_count": int(passenger_count),
-        }])
-
-        row = engineer_features(row)
-        X = scaler.transform(row[FEATURES].values.astype("float32"))
-        fare = float(model.predict(X, verbose=0).flatten()[0])
-        distance = float(row["trip_distance_km"].iloc[0])
-
-        rush = "Yes" if row["is_rush_hour"].iloc[0] else "No"
-        weekend = "Yes" if row["is_weekend"].iloc[0] else "No"
-
-        result = f"## Estimated Taxi Fare: ${fare:.2f}\n\n"
-        result += f"**Trip Distance:** {distance:.2f} km\n\n"
-        result += f"**Pickup time:** {timestamp.strftime('%A, %d %b %Y at %H:%M')}\n\n"
-        result += f"**Rush hour:** {rush} &nbsp;&nbsp;|&nbsp;&nbsp; **Weekend:** {weekend}\n\n"
-        result += f"**Passengers:** {int(passenger_count)}\n\n"
-        result += "---\n*Predicted by a deep feedforward neural network trained on "
-        result += "the NYC Taxi Fare dataset (2009–2015 fares).*"
-        return result
-
+        st.success(f"### Estimated Taxi Fare: ${fare:.2f}")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Trip Distance", f"{distance:.2f} km")
+        m2.metric("Rush hour", "Yes" if rush else "No")
+        m3.metric("Weekend", "Yes" if weekend else "No")
+        st.write(f"**Pickup time:** {timestamp.strftime('%A, %d %b %Y at %H:%M')}")
+        st.write(f"**Passengers:** {int(passenger_count)}")
+        st.caption(
+            "Predicted by a deep feedforward neural network trained on the "
+            "NYC Taxi Fare dataset (2009–2015 fares)."
+        )
     except Exception as e:
-        return f"**Error:** {e}\n\nCheck that the date is YYYY-MM-DD and the time is HH:MM."
-
-
-# ---------------------------------------------------------------------------
-# Interface
-# ---------------------------------------------------------------------------
-with gr.Blocks(title="NYC Taxi Fare Predictor", theme=gr.themes.Soft()) as demo:
-    gr.Markdown(
-        """
-        # NYC Taxi Fare Predictor
-        Deep Feedforward Neural Network | Lab Assignment 02
-
-        Pick a landmark or enter coordinates manually, set the trip time, and get an
-        estimated fare.
-        """
-    )
-
-    with gr.Row():
-        with gr.Column():
-            gr.Markdown("### Pickup")
-            pickup_place = gr.Dropdown(
-                choices=list(LANDMARKS.keys()),
-                value="Empire State Building",
-                label="Pickup location",
-            )
-            pu_lon = gr.Number(value=-73.9857, label="Pickup longitude")
-            pu_lat = gr.Number(value=40.7484, label="Pickup latitude")
-
-        with gr.Column():
-            gr.Markdown("### Drop-off")
-            dropoff_place = gr.Dropdown(
-                choices=list(LANDMARKS.keys()),
-                value="JFK Airport",
-                label="Drop-off location",
-            )
-            do_lon = gr.Number(value=-73.7781, label="Drop-off longitude")
-            do_lat = gr.Number(value=40.6413, label="Drop-off latitude")
-
-    with gr.Row():
-        date_str = gr.Textbox(value="2015-06-15", label="Date (YYYY-MM-DD)")
-        time_str = gr.Textbox(value="18:30", label="Time (HH:MM, 24-hour)")
-        passenger_count = gr.Slider(1, 6, value=1, step=1, label="Passengers")
-
-    predict_btn = gr.Button("Estimate Fare", variant="primary", size="lg")
-    output = gr.Markdown()
-
-    predict_btn.click(
-        fn=predict_fare,
-        inputs=[pickup_place, dropoff_place, pu_lon, pu_lat, do_lon, do_lat,
-                date_str, time_str, passenger_count],
-        outputs=output,
-    )
-
-    gr.Examples(
-        examples=[
-            ["Empire State Building", "JFK Airport", -73.9857, 40.7484, -73.7781, 40.6413, "2015-06-15", "18:30", 1],
-            ["Times Square", "Central Park", -73.9855, 40.7580, -73.9654, 40.7829, "2015-03-10", "09:00", 2],
-            ["Wall Street", "LaGuardia Airport", -74.0089, 40.7061, -73.8740, 40.7769, "2015-11-21", "14:15", 3],
-        ],
-        inputs=[pickup_place, dropoff_place, pu_lon, pu_lat, do_lon, do_lat,
-                date_str, time_str, passenger_count],
-    )
-
-
-if __name__ == "__main__":
-    demo.launch()
+        st.error(f"Error: {e}")
