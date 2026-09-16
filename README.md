@@ -3,8 +3,8 @@ title: NYC Taxi Fare Predictor
 emoji: 🚕
 colorFrom: yellow
 colorTo: gray
-sdk: gradio
-sdk_version: 4.44.0
+sdk: streamlit
+sdk_version: 1.39.0
 app_file: app.py
 pinned: false
 ---
@@ -35,7 +35,14 @@ Built for Lab Assignment 02 — Deep Learning.
 
 | File | Purpose |
 |---|---|
-| `app.py` | Gradio interface + feature engineering pipeline |
+| `app.py` | Streamlit interface + feature engineering pipeline |
 | `final_taxi_fare_model.keras` | Trained Keras model |
 | `scaler.pkl` | Fitted StandardScaler from training |
 | `requirements.txt` | Python dependencies |
+
+## Run locally
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
