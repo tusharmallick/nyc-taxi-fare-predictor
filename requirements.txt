@@ -1,6 +1,6 @@
 streamlit==1.39.0
 tensorflow-cpu
-keras==3.12.4
+keras>=3.13.2
 scikit-learn==1.6.1
 joblib==1.5.3
 numpy==2.0.2
